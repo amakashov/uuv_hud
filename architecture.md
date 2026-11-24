@@ -13,7 +13,9 @@ The prototype is a single C++ executable built with CMake and Qt 5.15. It links 
 
 Track source status separately from frame freshness. If frames stop arriving after playback begins, retain the last image and show `VIDEO STALE`. Report startup and connection errors through source status.
 
-Future adapters publish the same decoded-frame format. GStreamer handles RTSP reception and decoding. ONVIF selects a media profile and resolves its stream URI for the RTSP adapter. Basler and iRAYPLE adapters use the acquisition SDK for the selected model and transport. Add these dependencies when implementing their adapters.
+The optional Aravis adapter uses GigE Vision to acquire frames from a compatible iRAYPLE camera. A worker thread opens the camera, receives images into a bounded buffer pool, and publishes the newest complete image as RGBA. Select this source with `--gige` and a camera IP address or device ID.
+
+Future adapters publish the same decoded-frame format. GStreamer will handle RTSP reception and decoding. ONVIF will select a media profile and resolve its stream URI for the RTSP adapter. Add vendor SDKs for models or features that need them.
 
 ## Customizable overlays
 

@@ -38,3 +38,4 @@ private:
 
 std::unique_ptr<VideoSource> createTestPatternSource();
 std::unique_ptr<VideoSource> createWebcamSource();
+std::unique_ptr<VideoSource> createGigECameraSource(const QString &cameraId);

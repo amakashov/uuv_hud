@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <optional>
 
 namespace
 {
@@ -23,7 +24,7 @@ using namespace std::chrono_literals;
 class MainWindow final : public QMainWindow
 {
 public:
-    explicit MainWindow(bool forceTestPattern)
+    MainWindow(bool forceTestPattern, std::unique_ptr<VideoSource> gigECamera)
         : hud(new RovHudWidget(this)),
           heading(new HeadingWidget(hud)),
           horizon(new GyroHorizonWidget(hud)),
@@ -67,20 +68,11 @@ public:
 
         if (forceTestPattern) {
             startTestPattern(tr("Test pattern"));
+        } else if (gigECamera) {
+            startCamera(std::move(gigECamera), tr("GigE camera"));
         } else if (auto webcam = createWebcamSource()) {
-            statusBar()->showMessage(tr("Starting webcam…"));
-            source = std::move(webcam);
-            connect(source.get(), &VideoSource::failed, this, [this](const QString &error) {
-                if (!testPattern) {
-                    if (displayedSequence == 0 && source->latestFrame().sequence == 0) {
-                        startTestPattern(tr("Webcam error: %1 — test pattern").arg(error));
-                    } else {
-                        statusBar()->showMessage(tr("Webcam error: %1").arg(error));
-                    }
-                }
-            }, Qt::QueuedConnection);
-            sourceStarted = std::chrono::steady_clock::now();
-            source->start();
+            webcamDeadline = std::chrono::steady_clock::now() + 5s;
+            startCamera(std::move(webcam), tr("Webcam"));
         } else {
             startTestPattern(tr("Webcam unavailable — test pattern"));
         }
@@ -123,6 +115,25 @@ private:
         statusBar()->showMessage(message);
     }
 
+    void startCamera(std::unique_ptr<VideoSource> camera, const QString &name)
+    {
+        cameraName = name;
+        statusBar()->showMessage(tr("Starting %1…").arg(name));
+        source = std::move(camera);
+        connect(source.get(), &VideoSource::failed, this, [this](const QString &error) {
+            if (testPattern) {
+                return;
+            }
+            cameraFailed = true;
+            if (source->latestFrame().sequence == 0) {
+                startTestPattern(tr("%1 — test pattern").arg(error));
+            } else {
+                statusBar()->showMessage(tr("%1 error: %2").arg(cameraName, error));
+            }
+        }, Qt::QueuedConnection);
+        source->start();
+    }
+
     void refreshView()
     {
         const double seconds = telemetryClock.elapsed() / 1000.0;
@@ -132,14 +143,13 @@ private:
         const auto frame = source->latestFrame();
         const auto now = std::chrono::steady_clock::now();
         if (frame.sequence != displayedSequence) {
-            if (!testPattern && displayedSequence == 0 &&
-                statusBar()->currentMessage() == tr("Starting webcam…")) {
-                statusBar()->showMessage(tr("Webcam"));
+            if (!testPattern && !cameraFailed && displayedSequence == 0) {
+                statusBar()->showMessage(cameraName);
             }
             displayedSequence = frame.sequence;
             hud->setFrame(frame);
         }
-        if (frame.sequence == 0 && !testPattern && now - sourceStarted >= 5s) {
+        if (frame.sequence == 0 && !testPattern && webcamDeadline && now >= *webcamDeadline) {
             startTestPattern(tr("Webcam did not deliver frames — test pattern"));
         }
         const bool stale = frame.sequence != 0 && now - frame.arrival >= 1s;
@@ -156,8 +166,10 @@ private:
     Area headingArea = Area::Viewport;
     double desiredHeading = 20.0;
     std::unique_ptr<VideoSource> source;
-    std::chrono::steady_clock::time_point sourceStarted;
+    std::optional<std::chrono::steady_clock::time_point> webcamDeadline;
+    QString cameraName;
     quint64 displayedSequence = 0;
+    bool cameraFailed = false;
     bool testPattern = false;
     bool patternPaused = false;
     bool staleVisible = false;
@@ -173,10 +185,28 @@ int main(int argc, char *argv[])
     parser.addHelpOption();
     const QCommandLineOption testPattern(QStringLiteral("test-pattern"),
                                         QObject::tr("Use the generated test pattern."));
+    const QCommandLineOption gigE(QStringLiteral("gige"),
+                                  QObject::tr("Use a GigE Vision camera by IP address or device ID."),
+                                  QStringLiteral("camera"));
     parser.addOption(testPattern);
+    parser.addOption(gigE);
     parser.process(application);
 
-    MainWindow window(parser.isSet(testPattern));
+    std::unique_ptr<VideoSource> gigECamera;
+    if (parser.isSet(gigE)) {
+        const QString cameraId = parser.value(gigE).trimmed();
+        if (parser.isSet(testPattern) || cameraId.isEmpty()) {
+            qCritical("--gige requires a camera address or ID and cannot be combined with --test-pattern.");
+            return 2;
+        }
+        gigECamera = createGigECameraSource(cameraId);
+        if (!gigECamera) {
+            qCritical("GigE Vision support was not built. Install Aravis 0.8.25 or newer in the 0.8 series and rebuild.");
+            return 2;
+        }
+    }
+
+    MainWindow window(parser.isSet(testPattern), std::move(gigECamera));
     window.show();
     return application.exec();
 }

@@ -78,3 +78,10 @@ std::unique_ptr<VideoSource> createWebcamSource()
     return {};
 }
 #endif
+
+#ifndef ROV_HAS_ARAVIS
+std::unique_ptr<VideoSource> createGigECameraSource(const QString &)
+{
+    return {};
+}
+#endif
